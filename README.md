@@ -60,16 +60,19 @@ The format for a structured profile is below:
     "duplicate_row_count": int,
     "file_type": string,
     "encoding": string,
-    "correlation_matrix": string, (*)
+    "correlation_matrix": list(list(int)), (*)
+    "profile_schema": {
+        string: list(int)
+    },
 },
-"data_stats": {
-    <column name>: {
+"data_stats": [
+    {
         "column_name": string,
         "data_type": string,
         "data_label": string,
         "categorical": bool,
         "order": string,
-	"samples": list(str),
+        "samples": list(str),
         "statistics": {
             "sample_size": int,
             "null_count": int,
@@ -90,59 +93,66 @@ The format for a structured profile is below:
             "num_negatives": int,
             "histogram": { 
                 "bin_counts": list(int),
-		"bin_edges": list(float),
+                "bin_edges": list(float),
             },
             "quantiles": {
                 int: float
-            }
+            },
             "vocab": list(char),
-            "avg_predictions": dict(float), 
-            "data_label_representation": dict(float),
+            "avg_predictions": dict[string, float], 
+            "data_label_representation": dict[string, float],
             "categories": list(str),
             "unique_count": int,
             "unique_ratio": float,
+            "categorical_count": dict[string, int],
+            "gini_impurity": float,
+            "unalikeability": float,
             "precision": {
-	        'min': int,
-		'max': int,
-		'mean': float,
-		'var': float,
-		'std': float,
-		'sample_size': int,
-		'margin_of_error': float,
-		'confidence_level': float		
-	    },
-            "times": dict(float),
+                'min': int,
+                'max': int,
+                'mean': float,
+                'var': float,
+                'std': float,
+                'sample_size': int,
+                'margin_of_error': float,
+                'confidence_level': float     
+            },
+            "times": dict[string, float],
             "format": string
         }
     }
-}
+]
 ```
 (*) Currently the correlation matrix update is toggled off. It will be reset in a later update. Users can still use it as desired with the is_enable option set to True.
 
 The format for an unstructured profile is below:
 ```
-{
-    "global_stats": {
-        "samples_used": int,
-        "empty_line_count": int,
-        "file_type": string,
-        "encoding": string
-    },
-    "data_stats": {
-        "data_label": {
-            "entity_counts": {
-                "word_level": dict(int),
-                "true_char_level": dict(int),
-                "postprocess_char_level": dict(int)
-            },
-            "times": dict(float)
+"global_stats": {
+    "samples_used": int,
+    "empty_line_count": int,
+    "file_type": string,
+    "encoding": string
+},
+"data_stats": {
+    "data_label": {
+        "entity_counts": {
+            "word_level": dict[string, int],
+            "true_char_level": dict[string, int],
+            "postprocess_char_level": dict[string, int]
         },
-        "statistics": {
-            "vocab": list(char),
-            "words": list(string),
-            "word_count": dict(int),
-            "times": dict(float)
-        }
+        "entity_percentages": {
+            "word_level": dict[string, float],
+            "true_char_level": dict[string, float],
+            "postprocess_char_level": dict[string, float]
+        },
+        "times": dict[string, float]
+    },
+    "statistics": {
+        "vocab": list(char),
+        "vocab_count": dict[string, int],
+        "words": list(string),
+        "word_count": dict[string, int],
+        "times": dict[string, float]
     }
 }
 ```

@@ -1,4 +1,5 @@
 import csv
+from io import BytesIO
 import re
 from six import StringIO
 
@@ -507,14 +508,19 @@ class CSVData(SpreadSheetDataMixin, BaseData):
         Loads the data into memory from the file.
         """
         
-        self._file_encoding = data_utils.detect_file_encoding(input_file_path)
+        self._file_encoding = None
+        if not isinstance(input_file_path, StringIO):
+            self._file_encoding = \
+                data_utils.detect_file_encoding(input_file_path)
+
         data_as_str = data_utils.load_as_str_from_file(input_file_path,
                                                        self._file_encoding)
 
         if not self._delimiter or not self._checked_header:
             delimiter, quotechar = None, None
             if not self._delimiter or not self._quotechar:
-                delimiter, quotechar = self._guess_delimiter_and_quotechar(data_as_str)
+                delimiter, quotechar = \
+                    self._guess_delimiter_and_quotechar(data_as_str)
             if not self._delimiter:
                 self._delimiter = delimiter
             if not self._quotechar:
@@ -575,7 +581,10 @@ class CSVData(SpreadSheetDataMixin, BaseData):
         if options is None:
             options = dict()
 
-        file_encoding = data_utils.detect_file_encoding(file_path=file_path)
+        file_encoding = None
+        if not isinstance(file_path, StringIO):
+            file_encoding = data_utils.detect_file_encoding(file_path=file_path)
+
         delimiter = options.get("delimiter", None)
         quotechar = options.get("quotechar", None)
         header = options.get("header", 'auto')

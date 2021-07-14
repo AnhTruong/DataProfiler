@@ -1,13 +1,14 @@
 from collections import OrderedDict
 import json
 import warnings
-import types
+from six import StringIO
 
 import numpy as np
 import pandas as pd
 from . import data_utils
 from .base_data import BaseData
 from .structured_mixins import SpreadSheetDataMixin
+from .filepath_or_buffer import FileOrBufferHandler
 
 
 class JSONData(SpreadSheetDataMixin, BaseData):
@@ -361,8 +362,12 @@ class JSONData(SpreadSheetDataMixin, BaseData):
         if options is None:
             options = dict()
 
-        file_encoding = data_utils.detect_file_encoding(file_path=file_path)
-        with open(file_path, 'r', encoding=file_encoding) as data_file:
+        file_encoding = None
+        if not isinstance(file_path, StringIO):
+            file_encoding = data_utils.detect_file_encoding(file_path=file_path)
+
+        with FileOrBufferHandler(file_path, 'r', encoding=file_encoding) \
+                as data_file:
             try:
                 json.load(data_file)
                 return True
