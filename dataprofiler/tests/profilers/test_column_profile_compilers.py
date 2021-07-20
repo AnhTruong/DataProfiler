@@ -70,7 +70,6 @@ class TestBaseProfileCompilerClass(unittest.TestCase):
         merged_compiler = compiler1 + compiler2
         self.assertEqual(3, merged_compiler._profiles['test'])
         self.assertEqual('compiler1', merged_compiler.name)
-
     
     def test_diff_primitive_compilers(self):
         # Test different data types
@@ -223,6 +222,124 @@ class TestBaseProfileCompilerClass(unittest.TestCase):
         expected_diff = {}
         self.assertDictEqual(expected_diff, compiler1.diff(compiler2))
 
+    def test_compiler_stats_diff(self):
+        data1 = pd.Series(['1', '9', '9'])
+        data2 = pd.Series(['10', '9', '9', '9'])
+        options = StructuredOptions()
+
+        # Test normal diff
+        compiler1 = col_pro_compilers.ColumnStatsProfileCompiler(data1)
+        compiler2 = col_pro_compilers.ColumnStatsProfileCompiler(data2)
+        expected_diff = {
+            'order': ['ascending', 'descending'], 
+            'categorical': 'unchanged', 
+            'statistics': {
+                'unique_count': 'unchanged', 
+                'unique_ratio': 0.16666666666666663, 
+                'categories': [['1'], ['9'], ['10']], 
+                'gini_impurity': 0.06944444444444448, 
+                'unalikeability': 0.16666666666666663, 
+                'categorical_count': {
+                    '9': -1, 
+                    '1': [1, None], 
+                    '10': [None, 1]
+                }
+            }
+        }
+        self.assertDictEqual(expected_diff, compiler1.diff(compiler2))
+
+        # Test disabled categorical column in one compiler
+        options.category.is_enabled = False
+        compiler1 = col_pro_compilers.ColumnStatsProfileCompiler(data1, options)
+        compiler2 = col_pro_compilers.ColumnStatsProfileCompiler(data2)
+        expected_diff = {'order': ['ascending', 'descending']}
+        self.assertDictEqual(expected_diff, compiler1.diff(compiler2))
+        
+        # Test disabling categorical profile in both compilers
+        compiler1 = col_pro_compilers.ColumnStatsProfileCompiler(data1, options)
+        compiler2 = col_pro_compilers.ColumnStatsProfileCompiler(data2, options)
+        expected_diff = {'order': ['ascending', 'descending']}
+        self.assertDictEqual(expected_diff, compiler1.diff(compiler2))
+
+        # Test disabling everything
+        options.order.is_enabled = False
+        compiler1 = col_pro_compilers.ColumnStatsProfileCompiler(data1, options)
+        compiler2 = col_pro_compilers.ColumnStatsProfileCompiler(data2, options)
+        expected_diff = {}
+        self.assertDictEqual(expected_diff, compiler1.diff(compiler2))
+
+    @mock.patch(
+        'dataprofiler.profilers.data_labeler_column_profile.DataLabeler')
+    @mock.patch("dataprofiler.profilers.data_labeler_column_profile."
+               "DataLabelerColumn.update")
+    def test_compiler_data_labeler_diff(self, *mocked_datalabeler):
+        # Initialize dummy data
+        data = pd.Series([])
+
+        # Test normal diff
+        compiler1 = col_pro_compilers.ColumnDataLabelerCompiler(data)
+        compiler2 = col_pro_compilers.ColumnDataLabelerCompiler(data)
+
+        # Mock out the data_label, avg_predictions, and label_representation
+        # properties
+        with mock.patch("dataprofiler.profilers.data_labeler_column_profile"
+                        ".DataLabelerColumn.data_label"), \
+             mock.patch("dataprofiler.profilers.data_labeler_column_profile."
+                        "DataLabelerColumn.avg_predictions"), \
+             mock.patch("dataprofiler.profilers.data_labeler_column_profile."
+                        "DataLabelerColumn.label_representation"):
+            compiler1._profiles["data_labeler"].data_label = "a"
+            compiler1._profiles["data_labeler"].avg_predictions = {
+                "a": 0.25,
+                "b": 0.0,
+                "c": 0.75
+            }
+            compiler1._profiles["data_labeler"].label_representation = {
+                "a": 0.15,
+                "b": 0.01,
+                "c": 0.84
+            }
+        
+            compiler2._profiles["data_labeler"].data_label = "b"
+            compiler2._profiles["data_labeler"].avg_predictions = {
+                "a": 0.25,
+                "b": 0.70,
+                "c": 0.05
+            }
+            compiler2._profiles["data_labeler"].label_representation = {
+                "a": 0.99,
+                "b": 0.01,
+                "c": 0.0
+            }
+            
+            expected_diff = {
+                'statistics': {
+                    'avg_predictions': {
+                        'a': 'unchanged',
+                        'b': -0.7,
+                        'c': 0.7
+                    },
+                    'label_representation': {
+                        'a': -0.84, 
+                        'b': 'unchanged',
+                        'c': 0.84
+                    }
+                },
+                'data_label': [['a'], [], ['b']]
+            }
+            self.assertDictEqual(expected_diff, compiler1.diff(compiler2))
+
+        # Test disabling one datalabeler profile for compiler diff
+        options = StructuredOptions()
+        options.data_labeler.is_enabled = False
+        compiler1 = col_pro_compilers.ColumnDataLabelerCompiler(data, options)
+        expected_diff = {}
+        self.assertDictEqual(expected_diff, compiler1.diff(compiler2))
+
+        # Test disabling both datalabeler profiles for compiler diff
+        compiler2 = col_pro_compilers.ColumnDataLabelerCompiler(data, options)
+        expected_diff = {}
+        self.assertDictEqual(expected_diff, compiler1.diff(compiler2))
 
     @mock.patch.multiple(
         col_pro_compilers.BaseCompiler, __abstractmethods__=set())
@@ -281,10 +398,9 @@ class TestUnstructuredCompiler(unittest.TestCase):
                                 'o': 2, 's': 2, 't': 2, 'y': 1},
                 'vocab': [' ', '-', '.', '1', '2', '3', '4', 'D', 'J', 'a', 'e',
                           'h', 'i', 'm', 'n', 'o', 's', 't', 'y'],
-                'word_count': {'123': 1, '1234': 1, '432': 1, 'Doe': 1,
+                'word_count': {'123-432-1234': 1, 'Doe': 1,
                                'John': 1, 'hi': 1, 'name': 1, 'test': 1},
-                'words': ['test', 'hi', 'name', 'John', 'Doe', '123', '432',
-                          '1234']}}
+                'words': ['test', 'hi', 'name', 'John', 'Doe', '123-432-1234']}}
 
         output_profile = compiler.profile
 
