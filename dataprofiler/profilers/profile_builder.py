@@ -58,7 +58,6 @@ class StructuredColProfiler(object):
         self._min_true_samples = min_true_samples
         if self._min_true_samples is None:
             self._min_true_samples = 0
-
         self.sample_size = 0
         self.sample = list()
         self.null_count = 0
@@ -69,6 +68,20 @@ class StructuredColProfiler(object):
         self._index_shift = None
         self._last_batch_size = None
         self.profiles = {}
+
+        NO_FLAG = 0
+        self._null_values = {
+            "": NO_FLAG,
+            "nan": re.IGNORECASE,
+            "none": re.IGNORECASE,
+            "null": re.IGNORECASE,
+            "  *": NO_FLAG,
+            "--*": NO_FLAG,
+            "__*": NO_FLAG,
+        }
+        if options:
+            if options.null_values is not None:
+                self._null_values = options.null_values
 
         if df_series is not None and len(df_series) > 0:
 
@@ -183,6 +196,69 @@ class StructuredColProfiler(object):
             )
         return merged_profile
 
+    def diff(self, other_profile, options=None):
+        """
+        Finds the difference between 2 StructuredCols and returns the report
+
+        :param other: Structured col finding the difference with this one.
+        :type other: StructuredColProfiler
+        :param options: options to change results of the difference
+        :type options: dict
+        :return: difference of the structured column
+        :rtype: dict
+        """
+        unordered_profile = dict()
+        for key, profile in self.profiles.items():
+            if key in other_profile.profiles:
+                comp_diff = self.profiles[key].diff(other_profile.profiles[key],
+                                                    options=options)
+                utils.dict_merge(unordered_profile, comp_diff)
+
+        name = self.name
+        if isinstance(self.name, np.integer):
+            name = int(name)
+
+        unordered_profile.update({
+            "column_name": name,
+        })
+
+        unordered_profile["statistics"].update({
+            "sample_size": utils.find_diff_of_numbers(
+                self.sample_size, other_profile.sample_size),
+            "null_count": utils.find_diff_of_numbers(
+                self.null_count, other_profile.null_count),
+            "null_types": utils.find_diff_of_lists_and_sets(
+                self.null_types, other_profile.null_types),
+            "null_types_index": utils.find_diff_of_dicts_with_diff_keys(
+                self.null_types_index, other_profile.null_types_index),
+        })
+
+        if unordered_profile.get("data_type", None) is not None:
+            unordered_profile["statistics"].update({
+                "data_type_representation":
+                    unordered_profile["data_type_representation"]
+            })
+
+        dict_order = [
+            "column_name",
+            "data_type",
+            "data_label",
+            "categorical",
+            "order",
+            "statistics",
+        ]
+        profile = OrderedDict()
+        if 'data_label_profile' not in self.profiles or\
+                'data_label_profile' not in other_profile.profiles:
+            dict_order.remove("data_label")
+        for key in dict_order:
+            try:
+                profile[key] = unordered_profile[key]
+            except KeyError as e:
+                profile[key] = None
+
+        return profile
+    
     @property
     def profile(self):
         unordered_profile = dict()
@@ -323,8 +399,8 @@ class StructuredColProfiler(object):
 
     # TODO: flag column name with null values and potentially return row
     #  index number in the error as well
-    @staticmethod
-    def clean_data_and_get_base_stats(df_series, sample_size,
+
+    def clean_data_and_get_base_stats(self, df_series, sample_size,
                                       min_true_samples=None,
                                       sample_ids=None):
         """
@@ -344,16 +420,6 @@ class StructuredColProfiler(object):
             parameters
         :rtype: pd.Series, dict
         """
-        NO_FLAG = 0
-        null_values_and_flags = {
-            "": NO_FLAG,
-            "nan": re.IGNORECASE,
-            "none": re.IGNORECASE,
-            "null": re.IGNORECASE,
-            "  *": NO_FLAG,
-            "--*": NO_FLAG,
-            "__*": NO_FLAG,
-        }
 
         if min_true_samples is None:
             min_true_samples = 0
@@ -397,7 +463,7 @@ class StructuredColProfiler(object):
         na_columns = dict()
         true_sample_list = set()
         total_sample_size = 0
-        query = '|'.join(null_values_and_flags.keys())
+        query = '|'.join(self._null_values.keys())
         regex = f"^(?:{(query)})$"
         for chunked_sample_ids in sample_ind_generator:
             total_sample_size += len(chunked_sample_ids)
@@ -468,6 +534,9 @@ class BaseProfiler(object):
         :type options: ProfilerOptions Object
         :return: Profiler
         """
+        if min_true_samples is not None and not isinstance(min_true_samples, int):
+            raise ValueError('`min_true_samples` must be an integer or `None`.')
+        
         if self._default_labeler_type is None:
             raise ValueError('`_default_labeler_type` must be set when '
                              'overriding `BaseProfiler`.')
@@ -487,6 +556,7 @@ class BaseProfiler(object):
         self._samples_per_update = samples_per_update
         self._min_true_samples = min_true_samples
         self.total_samples = 0
+        self.times = defaultdict(float)
 
         # TODO: allow set via options
         self._sampling_ratio = 0.2
@@ -547,7 +617,33 @@ class BaseProfiler(object):
 
         merged_profile.total_samples = self.total_samples + other.total_samples
 
+        merged_profile.times = utils.add_nested_dictionaries(self.times,
+                                                             other.times)
+
         return merged_profile
+
+    def diff(self, other_profile, options=None):
+        """
+        Finds the difference of two profiles
+        :param other: profile being added to this one.
+        :type other: BaseProfiler
+        :return: diff of the two profiles
+        :rtype: dict
+        """
+        if type(other_profile) is not type(self):
+            raise TypeError('`{}` and `{}` are not of the same profiler type.'.
+                            format(type(self).__name__, 
+                                   type(other_profile).__name__))
+
+        diff_profile = OrderedDict([
+            ("global_stats", {
+                "file_type": utils.find_diff_of_strings_and_bools(
+                    self.file_type, other_profile.file_type),
+                "encoding": utils.find_diff_of_strings_and_bools(
+                    self.encoding, other_profile.encoding),
+            })])
+
+        return diff_profile
 
     def _get_sample_size(self, data):
         """
@@ -920,6 +1016,33 @@ class UnstructuredProfiler(BaseProfiler):
         merged_profile._profile = self._profile + other._profile
 
         return merged_profile
+    
+    def diff(self, other_profile, options=None):
+        """
+        Finds the difference between 2 unstuctured profiles and returns the 
+        report.
+
+        :param other: profile finding the difference with this one.
+        :type other: UnstructuredProfiler
+        :param options: options to impact the results of the diff
+        :type options: dict
+        :return: difference of the profiles
+        :rtype: dict
+        """
+        report = super().diff(other_profile, options)
+
+        report["global_stats"].update({
+                "samples_used": utils.find_diff_of_numbers(
+                    self.total_samples, other_profile.total_samples),
+                "empty_line_count": utils.find_diff_of_numbers(
+                    self._empty_line_count, other_profile._empty_line_count),
+                "memory_size": utils.find_diff_of_numbers(
+                    self.memory_size, other_profile.memory_size),
+            })
+
+        report["data_stats"] = self._profile.diff(other_profile._profile, 
+                                                  options=options)
+        return _prepare_report(report)
 
     def _update_base_stats(self, base_stats):
         """
@@ -970,15 +1093,15 @@ class UnstructuredProfiler(BaseProfiler):
                 "file_type": self.file_type,
                 "encoding": self.encoding,
                 "memory_size": self.memory_size,
+                "times": self.times,
             }),
             ("data_stats", OrderedDict()),
         ])
-
         report["data_stats"] = self._profile.profile
         return _prepare_report(report, output_format, omit_keys)
 
-    @staticmethod
-    def _clean_data_and_get_base_stats(data, sample_size,
+    @utils.method_timeit(name="clean_and_base_stats")
+    def _clean_data_and_get_base_stats(self, data, sample_size,
                                        min_true_samples=None):
         """
         Identify empty rows and return a cleaned version of text data without
@@ -1126,7 +1249,8 @@ class UnstructuredProfiler(BaseProfiler):
             "_empty_line_count": self._empty_line_count,
             "memory_size": self.memory_size,
             "options": self.options,
-            "_profile": self.profile
+            "_profile": self.profile,
+            "times": self.times,
         }
         self._save_helper(filepath, data_dict)
 
@@ -1227,9 +1351,72 @@ class StructuredProfiler(BaseProfiler):
         merged_profile._col_name_to_idx = copy.deepcopy(self._col_name_to_idx)
 
         # merge correlation
-        merged_profile.correlation_matrix = self._merge_correlation(other)
+        if (self.options.correlation.is_enabled
+                and other.options.correlation.is_enabled):
+            merged_profile.correlation_matrix = self._merge_correlation(other)
 
         return merged_profile
+
+    def diff(self, other_profile, options=None):
+        """
+        Finds the difference between 2 Profiles and returns the report
+
+        :param other: profile finding the difference with this one
+        :type other: StructuredProfiler
+        :param options: options to change results of the difference
+        :type options: dict
+        :return: difference of the profiles
+        :rtype: dict
+        """
+        report = super().diff( other_profile, options)
+        report["global_stats"].update({
+                "samples_used": utils.find_diff_of_numbers(
+                    self._max_col_samples_used, 
+                    other_profile._max_col_samples_used),
+                "column_count": utils.find_diff_of_numbers(
+                    len(self._profile), len(other_profile._profile)),
+                "row_count": utils.find_diff_of_numbers(
+                    self.total_samples, other_profile.total_samples),
+                "row_has_null_ratio": utils.find_diff_of_numbers(
+                    self._get_row_has_null_ratio(), 
+                    other_profile._get_row_has_null_ratio()),
+                "row_is_null_ratio": utils.find_diff_of_numbers(
+                    self._get_row_is_null_ratio(),
+                    other_profile._get_row_is_null_ratio()),
+                "unique_row_ratio": utils.find_diff_of_numbers(
+                    self._get_unique_row_ratio(),
+                    other_profile._get_unique_row_ratio()),
+                "duplicate_row_count": utils.find_diff_of_numbers(
+                    self._get_duplicate_row_count(),
+                    other_profile._get_row_is_null_ratio()),
+                "correlation_matrix": utils.find_diff_of_matrices(
+                    self.correlation_matrix, 
+                    other_profile.correlation_matrix),
+                "profile_schema": defaultdict(list)})
+        report.update({"data_stats": []})
+
+        # Extract the schema of each profile
+        self_profile_schema = defaultdict(list)
+        other_profile_schema = defaultdict(list)
+        for i in range(len(self._profile)):
+            col_name = self._profile[i].name
+            self_profile_schema[col_name].append(i)
+        for i in range(len(other_profile._profile)):
+            col_name = other_profile._profile[i].name
+            other_profile_schema[col_name].append(i)
+
+        report["global_stats"]["profile_schema"] = \
+            utils.find_diff_of_dicts_with_diff_keys(self_profile_schema, 
+                                                    other_profile_schema)
+
+        # Only find the diff of columns if the schemas are exactly the same
+        if self_profile_schema == other_profile_schema:
+            for i in range(len(self._profile)):
+                report["data_stats"].append(
+                    self._profile[i].diff(other_profile._profile[i], 
+                                          options=options))
+
+        return _prepare_report(report)
 
     @property
     def _max_col_samples_used(self):
@@ -1342,7 +1529,8 @@ class StructuredProfiler(BaseProfiler):
                 "file_type": self.file_type,
                 "encoding": self.encoding,
                 "correlation_matrix": self.correlation_matrix,
-                "profile_schema": defaultdict(list)
+                "profile_schema": defaultdict(list),
+                "times": self.times,
             }),
             ("data_stats", []),
         ])
@@ -1372,6 +1560,7 @@ class StructuredProfiler(BaseProfiler):
     def _get_duplicate_row_count(self):
         return self.total_samples - len(self.hashed_row_dict)
 
+    @utils.method_timeit(name='row_stats')
     def _update_row_statistics(self, data, sample_ids=None):
         """
         Iterate over the provided dataset row by row and calculate
@@ -1442,25 +1631,40 @@ class StructuredProfiler(BaseProfiler):
             self.row_has_null_count = len(null_in_row_count)
             self.row_is_null_count = len(null_rows)
 
-    def _get_correlation(self, clean_samples):
+    def _get_correlation(self, clean_samples, batch_properties):
         """
         Calculate correlation matrix on the cleaned data.
 
         :param clean_samples: the input cleaned dataset
         :type clean_samples: dict()
+        :param batch_properties: mean/std/counts of each batch column necessary
+        for correlation computation
+        :type batch_properties: dict()
         """
         columns = self.options.correlation.columns
         clean_column_ids = []
         if columns is None:
             for idx in range(len(self._profile)):
-                if (self._profile[idx].profile['data_type'] not in ['int', 'float']
-                        or self._profile[idx].null_count > 0):
+                data_type = self._profile[idx].\
+                    profiles["data_type_profile"].selected_data_type
+                if data_type not in ["int", "float"]:
                     clean_samples.pop(idx)
                 else:
                     clean_column_ids.append(idx)
 
-        data = pd.DataFrame(clean_samples)
-        data = data.apply(pd.to_numeric, errors='coerce')
+        data = pd.DataFrame(clean_samples).apply(pd.to_numeric, errors='coerce')
+        means = {index:mean for index, mean in enumerate(batch_properties['mean'])}
+        data = data.fillna(value=means)
+
+        # Update the counts/std if needed (i.e. if null rows or exist)
+        if (len(data) != batch_properties['count']).any():
+            adjusted_stds = np.sqrt(
+                batch_properties['std']**2 * (batch_properties['count'] - 1) \
+                / (len(data) - 1)
+            )
+            batch_properties['std'] = adjusted_stds
+        # Set count key to a single number now that everything's been adjusted
+        batch_properties['count'] = len(data)
 
         # fill correlation matrix with nan initially
         n_cols = len(self._profile)
@@ -1469,8 +1673,10 @@ class StructuredProfiler(BaseProfiler):
         # then, fill in the correlations for valid columns
         rows = [[id] for id in clean_column_ids]
         corr_mat[rows, clean_column_ids] = np.corrcoef(data, rowvar=False)
+
         return corr_mat
 
+    @utils.method_timeit(name='correlation')
     def _update_correlation(self, clean_samples, prev_dependent_properties):
         """
         Update correlation matrix for cleaned data.
@@ -1478,18 +1684,16 @@ class StructuredProfiler(BaseProfiler):
         :param clean_samples: the input cleaned dataset
         :type clean_samples: dict()
         """
-        batch_corr = self._get_correlation(clean_samples)
-        batch_samples = np.nan
-        if len(clean_samples) > 0:
-            batch_samples = len(list(clean_samples.values())[0])
         batch_properties = self._get_correlation_dependent_properties(clean_samples)
+        batch_corr = self._get_correlation(clean_samples, batch_properties)
 
         self.correlation_matrix = self._merge_correlation_helper(
             self.correlation_matrix, prev_dependent_properties["mean"],
-            prev_dependent_properties["std"], self.total_samples,
+            prev_dependent_properties["std"], self.total_samples - self.row_is_null_count,
             batch_corr, batch_properties["mean"],
-            batch_properties["std"], batch_samples)
+            batch_properties["std"], batch_properties['count'])
 
+    @utils.method_timeit(name='correlation')
     def _merge_correlation(self, other):
         """
         Merge correlation matrix from two profiles
@@ -1499,9 +1703,11 @@ class StructuredProfiler(BaseProfiler):
         """
         corr_mat1 = self.correlation_matrix
         corr_mat2 = other.correlation_matrix
-        if self.total_samples == 0:
+        n1 = self.total_samples - self.row_is_null_count
+        n2 = other.total_samples - other.row_is_null_count
+        if n1 == 0:
             return corr_mat2
-        if other.total_samples == 0:
+        if n2 == 0:
             return corr_mat1
 
         if corr_mat1 is None or corr_mat2 is None:
@@ -1522,7 +1728,6 @@ class StructuredProfiler(BaseProfiler):
         std1 = np.array(
             [self._profile[idx].profile['statistics']['stddev']
              for idx in range(len(self._profile)) if idx in col_ids1])
-        n1 = self.total_samples
 
         mean2 = np.array(
             [other._profile[idx].profile['statistics']['mean']
@@ -1530,7 +1735,6 @@ class StructuredProfiler(BaseProfiler):
         std2 = np.array(
             [other._profile[idx].profile['statistics']['stddev']
              for idx in range(len(self._profile)) if idx in col_ids2])
-        n2 = other.total_samples
         return self._merge_correlation_helper(corr_mat1, mean1, std1, n1,
                                               corr_mat2, mean2, std2, n2)
 
@@ -1549,25 +1753,32 @@ class StructuredProfiler(BaseProfiler):
         """
         dependent_properties = {
             'mean': np.full(len(self._profile), np.nan),
-            'std': np.full(len(self._profile), np.nan)
+            'std': np.full(len(self._profile), np.nan),
+            'count': np.full(len(self._profile), np.nan)
         }
         for id in range(len(self._profile)):
-
-            data_type_compiler = self._profile[id].profiles["data_type_profile"]
+            compiler = self._profile[id]
+            data_type_compiler = compiler.profiles["data_type_profile"]
             data_type = data_type_compiler.selected_data_type
             if data_type in ["int", "float"]:
                 data_type_profiler = data_type_compiler._profiles[data_type]
+                # Finding dependent values of previous, existing data
                 if batch is None:
                     n = data_type_profiler.match_count
                     dependent_properties['mean'][id] = data_type_profiler.mean
+                    # Subtract null row count as those aren't included in corr. calc
                     dependent_properties['std'][id] = \
-                        np.sqrt(data_type_profiler._biased_variance * n / (n - 1))
+                        np.sqrt(data_type_profiler._biased_variance * n / (self.total_samples - self.row_is_null_count- 1))
+                    dependent_properties['count'][id] = n
+                # Finding the properties of the batch data if given
                 elif id in batch.keys():
                     history = data_type_profiler._batch_history[-1]
                     n = history['match_count']
+                    # Since we impute values, we want the total rows (including nulls)
                     dependent_properties['mean'][id] = history['mean']
                     dependent_properties['std'][id] = \
                         np.sqrt(history['biased_variance'] * n / (n - 1))
+                    dependent_properties['count'][id] = n
 
         return dependent_properties
 
@@ -1641,7 +1852,7 @@ class StructuredProfiler(BaseProfiler):
         if isinstance(data, pd.Series):
             data = data.to_frame()
         elif isinstance(data, list):
-            data = pd.DataFrame(data)
+            data = pd.DataFrame(data, dtype=object)
 
         # Calculate schema of incoming data
         mapping_given = defaultdict(list)
@@ -1832,6 +2043,7 @@ class StructuredProfiler(BaseProfiler):
             "options": self.options,
             "_profile": self.profile,
             "_col_name_to_idx": self._col_name_to_idx,
+            "times": self.times,
         }
 
         self._save_helper(filepath, data_dict)

@@ -51,8 +51,9 @@ class TestStructuredProfiler(unittest.TestCase):
         cls.aws_dataset = pd.read_csv(cls.input_file_path)
         profiler_options = ProfilerOptions()
         profiler_options.set({'data_labeler.is_enabled': False})
-        cls.trained_schema = dp.StructuredProfiler(cls.aws_dataset, len(cls.aws_dataset),
-                                                   options=profiler_options)
+        with test_utils.mock_timeit():
+            cls.trained_schema = dp.StructuredProfiler(
+                cls.aws_dataset, len(cls.aws_dataset), options=profiler_options)
 
     @mock.patch('dataprofiler.profilers.profile_builder.'
                 'ColumnPrimitiveTypeProfileCompiler')
@@ -85,8 +86,15 @@ class TestStructuredProfiler(unittest.TestCase):
     @mock.patch('dataprofiler.profilers.profile_builder.'
                 'StructuredProfiler._update_correlation')
     def test_list_data(self, *mocks):
-        data = [1, None, 3, 4, 5, None, 1]
-        profiler = dp.StructuredProfiler(data)
+        data = [[1, 1],
+                [None, None],
+                [3, 3],
+                [4, 4],
+                [5, 5],
+                [None, None],
+                [1, 1]]
+        with test_utils.mock_timeit():
+            profiler = dp.StructuredProfiler(data)
 
         # test properties
         self.assertEqual("<class 'list'>", profiler.file_type)
@@ -95,8 +103,14 @@ class TestStructuredProfiler(unittest.TestCase):
         self.assertEqual(2, profiler.row_is_null_count)
         self.assertEqual(7, profiler.total_samples)
         self.assertEqual(5, len(profiler.hashed_row_dict))
-        self.assertListEqual([0], list(profiler._col_name_to_idx.keys()))
+        self.assertListEqual([0, 1], list(profiler._col_name_to_idx.keys()))
         self.assertIsNone(profiler.correlation_matrix)
+        self.assertDictEqual({'row_stats': 1}, profiler.times)
+
+        # validates the sample out maintains the same visual data format as the
+        # input.
+        self.assertListEqual(['5', '1', '1', '3', '4'],
+                             profiler.profile[0].sample)
 
     @mock.patch('dataprofiler.profilers.profile_builder.'
                 'ColumnPrimitiveTypeProfileCompiler')
@@ -110,7 +124,8 @@ class TestStructuredProfiler(unittest.TestCase):
                 'StructuredProfiler._update_correlation')
     def test_pandas_series_data(self, *mocks):
         data = pd.Series([1, None, 3, 4, 5, None, 1])
-        profiler = dp.StructuredProfiler(data)
+        with test_utils.mock_timeit():
+            profiler = dp.StructuredProfiler(data)
 
         # test properties
         self.assertEqual(
@@ -122,6 +137,7 @@ class TestStructuredProfiler(unittest.TestCase):
         self.assertEqual(5, len(profiler.hashed_row_dict))
         self.assertListEqual([0], list(profiler._col_name_to_idx.keys()))
         self.assertIsNone(profiler.correlation_matrix)
+        self.assertDictEqual({'row_stats': 1}, profiler.times)
 
         # test properties when series has name
         data.name = 'test'
@@ -150,8 +166,9 @@ class TestStructuredProfiler(unittest.TestCase):
                 'StructuredProfiler._merge_correlation')
     def test_add_profilers(self, *mocks):
         data = pd.DataFrame([1, None, 3, 4, 5, None, 1])
-        profile1 = dp.StructuredProfiler(data[:2])
-        profile2 = dp.StructuredProfiler(data[2:])
+        with test_utils.mock_timeit():
+            profile1 = dp.StructuredProfiler(data[:2])
+            profile2 = dp.StructuredProfiler(data[2:])
 
         # test incorrect type
         with self.assertRaisesRegex(TypeError,
@@ -191,6 +208,7 @@ class TestStructuredProfiler(unittest.TestCase):
         self.assertEqual(2, merged_profile.row_is_null_count)
         self.assertEqual(7, merged_profile.total_samples)
         self.assertEqual(5, len(merged_profile.hashed_row_dict))
+        self.assertDictEqual({'row_stats': 2}, merged_profile.times)
 
         # test success if drawn from multiple files
         profile2.encoding = 'test'
@@ -221,15 +239,18 @@ class TestStructuredProfiler(unittest.TestCase):
             ['test3', 7.0]])
 
         # check prior to update
-        profiler = dp.StructuredProfiler(data[:3])
+        with test_utils.mock_timeit():
+            profiler = dp.StructuredProfiler(data[:3])
         self.assertEqual(1, profiler.row_has_null_count)
         self.assertEqual(0, profiler.row_is_null_count)
         self.assertEqual(3, profiler.total_samples)
         self.assertEqual(2, len(profiler.hashed_row_dict))
         self.assertIsNone(profiler.correlation_matrix)
+        self.assertDictEqual({'row_stats': 1}, profiler.times)
 
         # check after update
-        profiler.update_profile(data[3:])
+        with test_utils.mock_timeit():
+            profiler.update_profile(data[3:])
 
         self.assertIsNone(profiler.encoding)
         self.assertEqual(
@@ -239,6 +260,7 @@ class TestStructuredProfiler(unittest.TestCase):
         self.assertEqual(8, profiler.total_samples)
         self.assertEqual(5, len(profiler.hashed_row_dict))
         self.assertIsNone(profiler.correlation_matrix)
+        self.assertDictEqual({'row_stats': 2}, profiler.times)
 
     def test_correct_unique_row_ratio_test(self):
         self.assertEqual(2999, len(self.trained_schema.hashed_row_dict))
@@ -273,15 +295,17 @@ class TestStructuredProfiler(unittest.TestCase):
 
         # data with a sole numeric column
         data = pd.DataFrame([1.0, 8.0, 1.0, -2.0, 5.0])
-        profiler = dp.StructuredProfiler(data, options=profile_options)
+        with test_utils.mock_timeit():
+            profiler = dp.StructuredProfiler(data, options=profile_options)
         expected_corr_mat = np.array([[1.0]])
         np.testing.assert_array_equal(expected_corr_mat,
                                       profiler.correlation_matrix)
+        self.assertDictEqual({'row_stats': 1, 'correlation': 1}, profiler.times)
 
         # data with one column with non-numeric calues
         data = pd.DataFrame([1.0, None, 1.0, None, 5.0])
         profiler = dp.StructuredProfiler(data, options=profile_options)
-        expected_corr_mat = np.array([[np.nan]])
+        expected_corr_mat = np.array([[1]])
         np.testing.assert_array_equal(expected_corr_mat,
                                       profiler.correlation_matrix)
 
@@ -292,6 +316,7 @@ class TestStructuredProfiler(unittest.TestCase):
             ['test1', 1.0],
             [None, None]])
         profiler = dp.StructuredProfiler(data, options=profile_options)
+        # Even the correlation with itself is NaN because the variance is zero
         expected_corr_mat = np.array([
             [np.nan, np.nan],
             [np.nan, np.nan]
@@ -310,7 +335,7 @@ class TestStructuredProfiler(unittest.TestCase):
             [0.26594894270403086, -0.49072329, 1.0]
         ])
         np.testing.assert_array_almost_equal(expected_corr_mat,
-                                      profiler.correlation_matrix)
+                                             profiler.correlation_matrix)
 
         # data with multiple numerical columns, with nan values
         data = pd.DataFrame({'a': [np.nan, np.nan, 1, 7, 5, 9, 4, 10, 7, 2],
@@ -318,26 +343,25 @@ class TestStructuredProfiler(unittest.TestCase):
                              'c': [1, 5, 3, 5, 7, 2, 6, 8, np.nan, np.nan]})
         profiler = dp.StructuredProfiler(data, options=profile_options)
         expected_corr_mat = np.array([
-            [np.nan, np.nan, np.nan],
-            [np.nan, np.nan, np.nan],
-            [np.nan, np.nan, np.nan]
+            [1, -0.28527657, 0.18626508],
+            [-0.28527657, 1, -0.52996792],
+            [0.18626508, -0.52996792, 1]
         ])
-        np.testing.assert_array_equal(expected_corr_mat,
-                                      profiler.correlation_matrix)
+        np.testing.assert_array_almost_equal(expected_corr_mat,
+                                             profiler.correlation_matrix)
 
-
-        # data with multiple numerical columns, with nan values in only one column
+        # data with multiple numerical columns, with nan values in only one
+        # column
         data = pd.DataFrame({'a': [np.nan, np.nan, 1, 7, 5, 9, 4, 10, 7, 2],
                              'b': [10, 11, 1, 4, 2, 5, 6, 3, 9, 8],
                              'c': [1, 5, 3, 5, 7, 2, 6, 8, 1, 2]})
         profiler = dp.StructuredProfiler(data, options=profile_options)
         expected_corr_mat = np.array([
-            [np.nan, np.nan, np.nan],
-            [np.nan, 1.0, -0.49072329],
-            [np.nan, -0.4907239, 1.0]
-        ])
+            [1, 0.03673504, 0.22844891],
+            [0.03673504, 1, -0.49072329],
+            [0.22844891, -0.49072329, 1]])
         np.testing.assert_array_almost_equal(expected_corr_mat,
-                                      profiler.correlation_matrix)
+                                             profiler.correlation_matrix)
 
         # data with only one numerical columns without nan values
         data = pd.DataFrame({'a': [3, 2, 1, 7, 5, 9, 4, 10, 7, 2]})
@@ -371,6 +395,39 @@ class TestStructuredProfiler(unittest.TestCase):
         np.testing.assert_array_almost_equal(expected_corr_mat,
                                              profiler.correlation_matrix)
 
+        # Data with null rows
+        data = pd.DataFrame({'a': [None, 2, 1, np.nan, 5, np.nan, 4, 10, 7, np.nan],
+                             'b': [np.nan, 11, 1, 'nan', 2, np.nan, 6, 3, 9, np.nan],
+                             'c': [np.nan, 5, 3, np.nan, 7, np.nan, 6, 8, 1, None]})
+        profiler = dp.StructuredProfiler(data, options=profile_options)
+
+        # correlation between [2, 1, 5, 4, 10, 7],
+        #                     [11, 1, 2, 6, 3, 9],
+        #                     [5, 3, 7, 6, 8, 1]
+        expected_corr_mat = np.array([
+            [1, -0.06987956, 0.32423975],
+            [-0.06987956, 1, -0.3613099],
+            [0.32423975, -0.3613099, 1]
+        ])
+        np.testing.assert_array_almost_equal(expected_corr_mat,
+                                             profiler.correlation_matrix)
+
+        # Data with null rows and some imputed values
+        data = pd.DataFrame({'a': [None, np.nan, 1, 7, 5, 9, 4, 10, np.nan, 2],
+                             'b': [10, 11, 1, 4, 2, 5, np.nan, 3, np.nan, 8],
+                             'c': [1, 5, 3, 5, np.nan, 2, 6, 8, np.nan, 2]})
+        profiler = dp.StructuredProfiler(data, options=profile_options)
+        # correlation between [*38/7*, *38/7*, 1, 7, 5, 9, 4, 10, 2],
+        #                     [10, 11, 1, 4, 2, 5, *11/2*, 3, 8],
+        #                     [1, 5, 3, 5, *4*, 2, 6, 8, 2]
+        expected_corr_mat = np.array([
+            [1, -0.03283837,  0.40038038],
+            [-0.03283837, 1, -0.30346637],
+            [0.40038038, -0.30346637, 1]
+        ])
+        np.testing.assert_array_almost_equal(expected_corr_mat,
+                                             profiler.correlation_matrix)
+
     @mock.patch('dataprofiler.profilers.profile_builder.'
                 'ColumnDataLabelerCompiler')
     @mock.patch('dataprofiler.profilers.profile_builder.DataLabeler',
@@ -389,8 +446,9 @@ class TestStructuredProfiler(unittest.TestCase):
         data1 = data[:5]
         data2 = data[5:]
 
-        profile1 = dp.StructuredProfiler(data1, options=profile_options)
-        profile2 = dp.StructuredProfiler(data2, options=profile_options)
+        with test_utils.mock_timeit():
+            profile1 = dp.StructuredProfiler(data1, options=profile_options)
+            profile2 = dp.StructuredProfiler(data2, options=profile_options)
         merged_profile = profile1 + profile2
 
         expected_corr_mat = np.array([
@@ -399,11 +457,14 @@ class TestStructuredProfiler(unittest.TestCase):
             [0.26594894270403086, -0.49072329, 1.0]
         ])
         np.testing.assert_array_almost_equal(expected_corr_mat,
-                                   merged_profile.correlation_matrix)
+                                             merged_profile.correlation_matrix)
+        self.assertDictEqual({'row_stats': 2, 'correlation': 2},
+                             merged_profile.times)
 
         # merge between an existing corr and None correlation (without data)
-        profile1 = dp.StructuredProfiler(None, options=profile_options)
-        profile2 = dp.StructuredProfiler(data, options=profile_options)
+        with test_utils.mock_timeit():
+            profile1 = dp.StructuredProfiler(None, options=profile_options)
+            profile2 = dp.StructuredProfiler(data, options=profile_options)
         # TODO: remove the mock below when merge profile is update
         with mock.patch('dataprofiler.profilers.profile_builder.'
                         'StructuredProfiler._add_error_checks'):
@@ -415,7 +476,27 @@ class TestStructuredProfiler(unittest.TestCase):
             [0.26594894270403086, -0.4907239, 1.0]
         ])
         np.testing.assert_array_almost_equal(expected_corr_mat,
-                                      merged_profile.correlation_matrix)
+                                             merged_profile.correlation_matrix)
+        self.assertDictEqual({'row_stats': 1, 'correlation': 1},
+                             merged_profile.times)
+
+        # Merge between existing data and empty data that still has samples
+        data = pd.DataFrame({'a': [1, 2, 4, np.nan, None, np.nan],
+                             'b': [5, 7, 1, np.nan, np.nan, 'nan']})
+        data1 = data[:3]
+        data2 = data[3:]
+
+        profile1 = dp.StructuredProfiler(data1, options=profile_options)
+        expected_corr_mat = np.array([
+            [1, -0.78571429],
+            [-0.78571429,  1]
+        ])
+        np.testing.assert_array_almost_equal(expected_corr_mat,
+                                             profile1.correlation_matrix)
+        profile2 = dp.StructuredProfiler(data2, options=profile_options)
+        merged_profile = profile1 + profile2
+        np.testing.assert_array_almost_equal(expected_corr_mat,
+                                             merged_profile.correlation_matrix)
 
     def test_correlation_update(self):
         profile_options = dp.ProfilerOptions()
@@ -428,8 +509,9 @@ class TestStructuredProfiler(unittest.TestCase):
         data1 = data[:5]
         data2 = data[5:]
 
-        profile = dp.StructuredProfiler(data1, options=profile_options)
-        profile.update_profile(data2)
+        with test_utils.mock_timeit():
+            profiler = dp.StructuredProfiler(data1, options=profile_options)
+            profiler.update_profile(data2)
 
         expected_corr_mat = np.array([
             [1.0, -0.26559388521279237, 0.26594894270403086],
@@ -437,7 +519,8 @@ class TestStructuredProfiler(unittest.TestCase):
             [0.26594894270403086, -0.4907239, 1.0]
         ])
         np.testing.assert_array_almost_equal(expected_corr_mat,
-                                             profile.correlation_matrix)
+                                             profiler.correlation_matrix)
+        self.assertDictEqual({'row_stats': 2, 'correlation': 2}, profiler.times)
 
         # Test when there's a non-numeric column
         data = pd.DataFrame({'a': [3, 2, 1, 7, 5, 9, 4, 10, 7, 2],
@@ -446,8 +529,8 @@ class TestStructuredProfiler(unittest.TestCase):
         data1 = data[:5]
         data2 = data[5:]
 
-        profile = dp.StructuredProfiler(data1, options=profile_options)
-        profile.update_profile(data2)
+        profiler = dp.StructuredProfiler(data1, options=profile_options)
+        profiler.update_profile(data2)
 
         expected_corr_mat = np.array([
             [1.0, -0.26559388521279237, np.nan],
@@ -455,9 +538,10 @@ class TestStructuredProfiler(unittest.TestCase):
             [np.nan, np.nan, np.nan]
         ])
         np.testing.assert_array_almost_equal(expected_corr_mat,
-                                             profile.correlation_matrix)
+                                             profiler.correlation_matrix)
 
         # Data with multiple numerical and non-numeric columns, with nan values in only one column
+        # NaNs imputed to (9+4+10)/3
         data = pd.DataFrame({'a': [7, 2, 1, 7, 5, 9, 4, 10, np.nan, np.nan],
                              'b': [10, 11, 1, 4, 2, 5, 6, 3, 9, 8],
                              'c': ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'],
@@ -465,16 +549,58 @@ class TestStructuredProfiler(unittest.TestCase):
         data1 = data[:5]
         data2 = data[5:]
 
-        profile = dp.StructuredProfiler(data1, options=profile_options)
-        profile.update_profile(data2)
+        profiler = dp.StructuredProfiler(data1, options=profile_options)
+        profiler.update_profile(data2)
         expected_corr_mat = np.array([
+            [ 1,  0.04721482, np.nan, -0.09383408],
+            [ 0.04721482,  1, np.nan,-0.49072329],
             [np.nan, np.nan, np.nan, np.nan],
-            [np.nan, 1.0, np.nan, -0.4907239],
-            [np.nan, np.nan, np.nan, np.nan],
-            [np.nan, -0.490723290044827, np.nan, 1]
+            [-0.09383408, -0.49072329, np.nan, 1]]
+        )
+        np.testing.assert_array_almost_equal(expected_corr_mat,
+                                             profiler.correlation_matrix)
+
+        # Data with null rows, all null rows are dropped
+        data = pd.DataFrame({'a': [np.nan, 2, 1, None, 5, np.nan, 4, 10, 7, 'NaN'],
+                             'b': [np.nan, 11, 1, np.nan, 2, np.nan, 6, 3, 9, np.nan],
+                             'c': [np.nan, 5, 3, np.nan, 7, None, 6, 8, 1, np.nan]})
+        data1 = data[:5]
+        data2 = data[5:]
+        profiler = dp.StructuredProfiler(data1, options=profile_options)
+        profiler.update_profile(data2)
+        # correlation between [2, 1, 5, 4, 10, 7],
+        #                     [11, 1, 2, 6, 3, 9],
+        #                     [5, 3, 7, 6, 8, 1]
+        expected_corr_mat = np.array([
+            [1, -0.06987956, 0.32423975],
+            [-0.06987956, 1, -0.3613099],
+            [0.32423975, -0.3613099, 1]
         ])
         np.testing.assert_array_almost_equal(expected_corr_mat,
-                                             profile.correlation_matrix)
+                                             profiler.correlation_matrix)
+
+        # Data with null rows and some imputed values
+        data = pd.DataFrame({'a': [None, np.nan, 1, 7, 5, 9, 4, 10, 'nan', 2],
+                             'b': [10, 11, 1, 4, 2, 5, 'NaN', 3, None, 8],
+                             'c': [1, 5, 3, 5, np.nan, 2, 6, 8, None, 2]})
+        data1 = data[:5]
+        data2 = data[5:]
+        profiler = dp.StructuredProfiler(data1, options=profile_options)
+        profiler.update_profile(data2)
+        # correlation between [*13/3*, *13/3*, 1, 7, 5]
+        #                     [10, 11, 1, 4, 2]
+        #                     [1, 5, 3, 5, *7/2*]
+        # then updated with correlation (9th row dropped) between
+        #                     [9, 4, 10, 2],
+        #                     [5, *16/3*, 3, 8],
+        #                     [2, 6, 8, 2]
+        expected_corr_mat = np.array([
+            [1, -0.16079606,  0.43658332],
+            [-0.16079606, 1, -0.2801748],
+            [0.43658332, -0.2801748, 1]
+        ])
+        np.testing.assert_array_almost_equal(expected_corr_mat,
+                                             profiler.correlation_matrix)
 
     def test_correct_datatime_schema_test(self):
         profile_idx = self.trained_schema._col_name_to_idx["datetime"][0]
@@ -536,13 +662,16 @@ class TestStructuredProfiler(unittest.TestCase):
                 "samples_used", "column_count", "row_count",
                 "row_has_null_ratio", 'row_is_null_ratio',
                 "unique_row_ratio", "duplicate_row_count", "file_type",
-                "encoding", "correlation_matrix", "profile_schema"
+                "encoding", "correlation_matrix", "profile_schema", "times"
             ]
         )
-        flat_report = self.trained_schema.report(report_options={"output_format":"flat"})
+        flat_report = self.trained_schema.report(
+            report_options={"output_format": "flat"})
         self.assertEqual(test_utils.get_depth(flat_report), 1)
-        with mock.patch('dataprofiler.profilers.helpers.report_helpers._prepare_report') as pr_mock:
-            self.trained_schema.report(report_options={"output_format":'pretty'})
+        with mock.patch('dataprofiler.profilers.helpers.report_helpers'
+                        '._prepare_report') as pr_mock:
+            self.trained_schema.report(
+                report_options={"output_format": 'pretty'})
             # Once for global_stats, once for each of 16 columns
             self.assertEqual(pr_mock.call_count, 17)
 
@@ -639,7 +768,6 @@ class TestStructuredProfiler(unittest.TestCase):
 
         for col_report in report["data_stats"]:
             self.assertIsNone(col_report)
-
 
     def test_report_quantiles(self):
         report_none = self.trained_schema.report(
@@ -762,7 +890,7 @@ class TestStructuredProfiler(unittest.TestCase):
         )
         with self.assertRaisesRegex(TypeError, 'Cannot provide TextData object'
                                                ' to StructuredProfiler'):
-            profile = dp.StructuredProfiler(dp.Data(text_file_path))
+            profiler = dp.StructuredProfiler(dp.Data(text_file_path))
 
     @mock.patch('dataprofiler.profilers.profile_builder.'
                 'StructuredProfiler._update_correlation')
@@ -811,6 +939,25 @@ class TestStructuredProfiler(unittest.TestCase):
                                                samples_per_update=1)
         self.assertEqual(2, sparse_profile._min_col_samples_used)
 
+    @mock.patch('dataprofiler.profilers.profile_builder.StructuredProfiler.'
+                'update_profile')
+    @mock.patch('dataprofiler.profilers.profile_builder.DataLabeler')
+    def test_min_true_samples(self, *mocks):
+        empty_df = pd.DataFrame([])
+
+        # Test invalid input
+        msg = "`min_true_samples` must be an integer or `None`."
+        with self.assertRaisesRegex(ValueError, msg):
+            profile = dp.StructuredProfiler(empty_df, min_true_samples="Bloop")
+
+        # Test None input (equivalent to zero)
+        profile = dp.StructuredProfiler(empty_df, min_true_samples=None)
+        self.assertEqual(None, profile._min_true_samples)
+        
+        # Test valid input
+        profile = dp.StructuredProfiler(empty_df, min_true_samples=10)
+        self.assertEqual(10, profile._min_true_samples)
+        
     def test_save_and_load(self):
         datapth = "dataprofiler/tests/data/"
         test_files = ["csv/guns.csv", "csv/iris.csv"]
@@ -1046,6 +1193,172 @@ class TestStructuredProfiler(unittest.TestCase):
             _get_and_validate_schema_mapping(dupe_schema_1, dupe_schema_1)
         self.assertDictEqual(actual_schema, expected_schema)
 
+    @mock.patch("dataprofiler.profilers.data_labeler_column_profile."
+                "DataLabelerColumn.update")
+    @mock.patch('dataprofiler.profilers.profile_builder.DataLabeler')
+    @mock.patch("dataprofiler.profilers.column_profile_compilers."
+                "ColumnPrimitiveTypeProfileCompiler.diff")
+    @mock.patch("dataprofiler.profilers.column_profile_compilers."
+                "ColumnStatsProfileCompiler.diff")
+    @mock.patch("dataprofiler.profilers.column_profile_compilers."
+                "ColumnDataLabelerCompiler.diff")
+    def test_diff(self, *mocks):
+        # Data labeler compiler diff
+        mocks[0].return_value = {
+            'statistics': {
+                'avg_predictions': {
+                    'a': 'unchanged'
+                },
+                'label_representation': {
+                    'a': 'unchanged'
+                }
+            },
+            'data_label': [[], ['a'], []]
+        }
+        # stats compiler diff
+        mocks[1].return_value = {
+            'order': ['ascending', 'descending'], 
+            'categorical': 'unchanged', 
+            'statistics': {
+                'all_compiler_stats': 'unchanged'
+            }
+        }
+        # primitive stats compiler diff
+        mocks[2].return_value = {
+            'data_type_representation': {
+                'all_data_types': 'unchanged'
+            },
+             'data_type': 'unchanged',
+             'statistics': {
+                 'numerical_statistics_here': "unchanged"
+             }
+        }
+
+        data1 = pd.DataFrame([[1, 2], [5, 6]],
+                            columns=["a", "b"])
+        data2 = pd.DataFrame([[4, 3], [8, 7], [None, None], [9, 10]],
+                                 columns=["a", "b"])
+
+        options = dp.ProfilerOptions()
+        options.structured_options.correlation.is_enabled = True
+        profile1 = dp.StructuredProfiler(data1, options=options)
+        options2 = dp.ProfilerOptions()
+        options2.structured_options.correlation.is_enabled = True
+        profile2 = dp.StructuredProfiler(data2, options=options2)
+
+        expected_diff = {
+            'global_stats': {
+                'samples_used': -2, 
+                'column_count': 'unchanged', 
+                'row_count': -2, 
+                'row_has_null_ratio': -0.25, 
+                'row_is_null_ratio': -0.25, 
+                'unique_row_ratio': 'unchanged', 
+                'duplicate_row_count': -0.25, 
+                'file_type': 'unchanged', 
+                'encoding': 'unchanged', 
+                'correlation_matrix': 
+                    np.array([[1.11022302e-16, 3.13803955e-02],
+                              [3.13803955e-02, 0.00000000e+00]], dtype=np.float),
+                'profile_schema': [{}, {'a': 'unchanged', 'b': 'unchanged'}, {}]}, 
+            'data_stats': [
+                {
+                    'column_name': 'a', 
+                     'data_type': 'unchanged', 
+                     'data_label': [[], ['a'], []], 
+                     'categorical': 'unchanged', 
+                     'order': ['ascending', 'descending'], 
+                     'statistics': {
+                         'numerical_statistics_here': 
+                             'unchanged', 
+                         'all_compiler_stats': 
+                             'unchanged', 
+                         'avg_predictions': {'a': 'unchanged'}, 
+                         'label_representation': {'a': 'unchanged'}, 
+                         'sample_size': -2, 
+                         'null_count': -1, 
+                         'null_types': [[], [], ['nan']], 
+                         'null_types_index': [{}, {}, {'nan': {2}}], 
+                         'data_type_representation': {
+                             'all_data_types': 'unchanged'
+                         }
+                     }
+                },
+                {
+                     'column_name': 'b', 
+                     'data_type': 'unchanged', 
+                     'data_label': [[], ['a'], []], 
+                     'categorical': 'unchanged', 
+                     'order': ['ascending', 'descending'], 
+                     'statistics': {
+                         'numerical_statistics_here': 'unchanged', 
+                         'all_compiler_stats': 'unchanged', 
+                         'avg_predictions': {'a': 'unchanged'}, 
+                         'label_representation': {'a': 'unchanged'}, 
+                         'sample_size': -2, 
+                         'null_count': -1, 
+                         'null_types': [[], [], ['nan']], 
+                         'null_types_index': [{}, {}, {'nan': {2}}], 
+                         'data_type_representation': {
+                             'all_data_types': 'unchanged'
+                         }
+                     }
+                 }
+            ]
+        }
+
+        diff = profile1.diff(profile2)
+        expected_mat = expected_diff["global_stats"].pop("correlation_matrix")
+        diff_mat = diff["global_stats"].pop("correlation_matrix")
+
+        self.assertEqual(str(expected_mat), str(diff_mat))
+        self.assertDictEqual(expected_diff, diff)
+    
+    @mock.patch('dataprofiler.profilers.profile_builder.DataLabeler')
+    @mock.patch("dataprofiler.profilers.data_labeler_column_profile."
+                "DataLabelerColumn.update")
+    def test_diff_type_checking(self, *mocks):
+        data = pd.DataFrame([[1, 2], [5, 6]],
+                            columns=["a", "b"])
+        profile = dp.StructuredProfiler(data)
+        with self.assertRaisesRegex(TypeError, 
+                                    '`StructuredProfiler` and `str` are not of '
+                                    'the same profiler type.'):
+            profile.diff("ERROR")
+        
+    @mock.patch('dataprofiler.profilers.profile_builder.DataLabeler')
+    @mock.patch("dataprofiler.profilers.data_labeler_column_profile."
+                "DataLabelerColumn.update")
+    def test_diff_with_different_schema(self, *mocks):
+        
+        data1 = pd.DataFrame([[1, 2], [5, 6]],
+                             columns=["G", "b"])
+        data2 = pd.DataFrame([[4, 3, 1], [8, 7, 3], [None, None, 1], [9, 1, 10]],
+                             columns=["a", "b", "c"])
+
+        # Test via add
+        profile1 = dp.StructuredProfiler(data1)
+        profile2 = dp.StructuredProfiler(data2)
+        
+        expected_diff = {
+            'global_stats': {
+                'file_type': 'unchanged', 
+                'encoding': 'unchanged', 
+                'samples_used': -2, 
+                'column_count': -1, 
+                'row_count': -2, 
+                'row_has_null_ratio': -0.25, 
+                'row_is_null_ratio': 'unchanged', 
+                'unique_row_ratio': 'unchanged', 
+                'duplicate_row_count': 'unchanged', 
+                'correlation_matrix': None, 
+                'profile_schema': [{'G': [0]}, 
+                                   {'b': 'unchanged'}, 
+                                   {'a': [0], 'c': [2]}]}, 
+            'data_stats': []
+        }
+
+        self.assertDictEqual(expected_diff, profile1.diff(profile2))
 
 class TestStructuredColProfilerClass(unittest.TestCase):
 
@@ -1174,7 +1487,7 @@ class TestStructuredColProfilerClass(unittest.TestCase):
                                     'added together.'):
             profile1 + profile2
 
-    def test_clean_data_and_get_base_stats(self):
+    def test_clean_data_and_get_base_stats(self, *mocks):
         data = pd.Series([1, None, 3, 4, None, 6],
                          index=['a', 'b', 'c', 'd', 'e', 'f'])
 
@@ -1182,15 +1495,54 @@ class TestStructuredColProfilerClass(unittest.TestCase):
         # previously `iloc` was used at:
         # `df_series = df_series.loc[sorted(true_sample_list)]`
         # which caused errors
+
+        #Tests with default null values set
+        profiler = mock.Mock(spec=StructuredColProfiler)
+        profiler._null_values = {
+            "": 0,
+            "nan": re.IGNORECASE,
+            "none": re.IGNORECASE,
+            "null": re.IGNORECASE,
+            "  *": 0,
+            "--*": 0,
+            "__*": 0,
+        }
+
         test_utils.set_seed(seed=0)
         df_series, base_stats = \
             StructuredColProfiler.clean_data_and_get_base_stats(
-                df_series=data[1:], sample_size=6, min_true_samples=0)
+                profiler, df_series=data[1:], sample_size=6,
+                min_true_samples=0)
         # note data above is a subset `df_series=data[1:]`, 1.0 will not exist
         self.assertTrue(np.issubdtype(np.object_, df_series.dtype))
         self.assertDictEqual({'sample': ['4.0', '6.0', '3.0'],
                               'sample_size': 5, 'null_count': 2,
                               'null_types': dict(nan=['e', 'b']),
+                              'min_id': None, 'max_id': None}, base_stats)
+
+        # Tests with some other null values set
+        profiler._null_values = {
+            "1.0": 0,
+            "3.0": 0
+        }
+        df_series, base_stats = \
+            StructuredColProfiler.clean_data_and_get_base_stats(
+                profiler, df_series=data, sample_size=6,
+                min_true_samples=0)
+        self.assertDictEqual({'sample': ["nan", '6.0', '4.0', "nan"],
+                              'sample_size': 6, 'null_count': 2,
+                              'null_types': {'1.0': ['a'], '3.0': ['c']},
+                              'min_id': None, 'max_id': None}, base_stats)
+
+        # Tests with no null values set
+        profiler._null_values = {}
+        df_series, base_stats = \
+            StructuredColProfiler.clean_data_and_get_base_stats(
+                profiler, df_series=data, sample_size=6,
+                min_true_samples=0)
+        self.assertDictEqual({'sample': ["3.0", "4.0", '6.0', "nan", "1.0"],
+                              'sample_size': 6, 'null_count': 0,
+                              'null_types': {},
                               'min_id': None, 'max_id': None}, base_stats)
 
     def test_column_names(self):
@@ -1377,7 +1729,78 @@ class TestStructuredColProfilerClass(unittest.TestCase):
         profile.update_profile(data[2:])
         self.assertEqual(0, profile._min_id)
         self.assertEqual(6, profile._max_id)
+        
+    @mock.patch('dataprofiler.profilers.data_labeler_column_profile.DataLabeler')
+    @mock.patch("dataprofiler.profilers.data_labeler_column_profile."
+                "DataLabelerColumn.update")
+    @mock.patch("dataprofiler.profilers.column_profile_compilers."
+                "ColumnPrimitiveTypeProfileCompiler.diff")
+    @mock.patch("dataprofiler.profilers.column_profile_compilers."
+                "ColumnStatsProfileCompiler.diff")
+    @mock.patch("dataprofiler.profilers.column_profile_compilers."
+                "ColumnDataLabelerCompiler.diff")
+    def test_diff(self, *mocks):
+        # Data labeler compiler diff
+        mocks[0].return_value = {
+            'statistics': {
+                'avg_predictions': {
+                    'a': 'unchanged'
+                },
+                'label_representation': {
+                    'a': 'unchanged'
+                }
+            },
+            'data_label': [[], ['a'], []]
+        }
+        # stats compiler diff
+        mocks[1].return_value = {
+            'order': ['ascending', 'descending'],
+            'categorical': 'unchanged',
+            'statistics': {
+                'all_compiler_stats': 'unchanged'
+            }
+        }
+        # primitive stats compiler diff
+        mocks[2].return_value = {
+            'data_type_representation': {
+                'all_data_types': 'unchanged'
+            },
+            'data_type': 'unchanged',
+            'statistics': {
+                'numerical_statistics_here': "unchanged"
+            }
+        }
+        
+        data = pd.Series([1, None, 3, 4, 5, None, 1])
+        data2 = pd.Series(["hello", "goodby", 125, 0])
+        data.name = "TEST"
+        data2.name = "TEST"
 
+        profile1 = StructuredColProfiler(data)
+        profile2 = StructuredColProfiler(data2)
+        
+        expected_diff = {
+            'column_name': 'TEST', 
+            'data_type': 'unchanged', 
+            'data_label': [[], ['a'], []], 
+            'categorical': 'unchanged', 
+            'order': ['ascending', 'descending'], 
+            'statistics': {
+                'numerical_statistics_here': 'unchanged', 
+                'all_compiler_stats': 'unchanged', 
+                'avg_predictions': {'a': 'unchanged'}, 
+                'label_representation': {'a': 'unchanged'}, 
+                'sample_size': 3, 
+                'null_count': 2, 
+                'null_types': [['nan'], [], []], 
+                'null_types_index': [{'nan': {1, 5}}, {}, {}], 
+                'data_type_representation': {
+                    'all_data_types': 'unchanged'
+                }
+            }
+        }
+
+        self.assertDictEqual(expected_diff, dict(profile1.diff(profile2)))
 
 @mock.patch('dataprofiler.profilers.profile_builder.UnstructuredCompiler',
             spec=UnstructuredCompiler)
@@ -1404,6 +1827,7 @@ class TestUnstructuredProfiler(unittest.TestCase):
         self.assertEqual(5000, profiler._min_sample_size)
         self.assertEqual([], profiler.sample)
         self.assertIsInstance(profiler.options, UnstructuredOptions)
+        self.assertDictEqual({}, profiler.times)
 
         # can set samples_per_update and min_true_samples
         profiler = UnstructuredProfiler(None, samples_per_update=10,
@@ -1422,6 +1846,7 @@ class TestUnstructuredProfiler(unittest.TestCase):
                          profiler.file_type)
         self.assertIsNone(profiler.encoding)
         self.assertIsInstance(profiler._profile, UnstructuredCompiler)
+        self.assertIn('clean_and_base_stats', profiler.times)
 
         # can properties update correctly for data loaded from file
         data = pd.Series(['this', 'is my', '\n\r', 'test'])
@@ -1489,15 +1914,20 @@ class TestUnstructuredProfiler(unittest.TestCase):
         data2 = pd.Series(['here\n', '\t    ', ' ', ' is', '\n\r', 'more data'])
 
         # create profilers
-        profiler1 = UnstructuredProfiler(data1)
-        profiler2 = UnstructuredProfiler(data2)
+        with test_utils.mock_timeit():
+            profiler1 = UnstructuredProfiler(data1)
+            profiler2 = UnstructuredProfiler(data2)
+
+        self.assertDictEqual({'clean_and_base_stats': 1}, profiler1.times)
+        self.assertDictEqual({'clean_and_base_stats': 1}, profiler2.times)
 
         # mock out _profile
         profiler1._profile = 1
         profiler2._profile = 2
 
         # merge profilers
-        merged_profile = profiler1 + profiler2
+        with test_utils.mock_timeit():
+            merged_profile = profiler1 + profiler2
         self.assertEqual(10, merged_profile.total_samples)
         self.assertEqual(4, merged_profile._empty_line_count)
         self.assertEqual(40 / 1024 ** 2, merged_profile.memory_size)
@@ -1505,6 +1935,61 @@ class TestUnstructuredProfiler(unittest.TestCase):
         self.assertCountEqual(['this', ' is', 'here\n', 'more data', 'is my'],
                               merged_profile.sample)
         self.assertEqual(3, merged_profile._profile)
+        self.assertDictEqual({'clean_and_base_stats': 2}, merged_profile.times)
+
+    @mock.patch('dataprofiler.profilers.profile_builder.UnstructuredCompiler.diff')
+    def test_diff(self, *mocks):
+
+        # Set up compiler diff
+        mocks[2].side_effect = [UnstructuredCompiler(), UnstructuredCompiler()]
+        mocks[0].return_value = {
+            'statistics': {
+                'all_vocab_and_word_stats': [['A', 'B'], ['C'], ['D']]
+            }, 
+            'data_label': {
+                'entity_counts': {
+                    'word_and_char_level_stats': {
+                        'LABEL': 'unchanged'
+                    }
+                }, 
+                'entity_percentages': {
+                    'word_and_char_level_stats': {
+                        'LABEL': 'unchanged'
+                    }
+                }
+            }
+        }
+
+        data1 = pd.Series(['this', 'is my', '\n\r', 'test'])
+        data2 = pd.Series(['here\n', '\t    ', ' ', ' is', '\n\r', 'more data'])
+        profiler1 = UnstructuredProfiler(data1)
+        profiler2 = UnstructuredProfiler(data2)
+
+        expected_diff = {
+            'global_stats': {
+                'samples_used': -2, 
+                'empty_line_count': -2, 
+                'file_type': 'unchanged', 
+                'encoding': 'unchanged', 
+                'memory_size': -10/1024**2
+            }, 
+            'data_stats': {
+                'statistics': {
+                    'all_vocab_and_word_stats': [['A', 'B'], ['C'], ['D']]}, 
+                'data_label': {
+                    'entity_counts': {
+                        'word_and_char_level_stats': 
+                            {'LABEL': 'unchanged'}
+                    }, 
+                    'entity_percentages': {
+                        'word_and_char_level_stats': {
+                            'LABEL': 'unchanged'
+                        }
+                    }
+                }
+            }
+        }
+        self.assertDictEqual(expected_diff, profiler1.diff(profiler2))
 
     def test_get_sample_size(self, *mocks):
         data = pd.DataFrame([0] * int(50e3))
@@ -1532,10 +2017,15 @@ class TestUnstructuredProfiler(unittest.TestCase):
     def test_clean_data_and_get_base_stats(self, *mocks):
         data = pd.Series(['here\n', '\t    ', 'a', ' is', '\n\r', 'more data'])
 
+        # needed bc _clean_data_and_get_base_stats is not static
+        # for timeit which wraps this func and uses the class
+        profiler = mock.Mock(spec=UnstructuredProfiler)
+        profiler.times = {'clean_and_base_stats': 0}
+
         # case when min_true_samples not set and subset of data
         df_series, base_stats = \
             UnstructuredProfiler._clean_data_and_get_base_stats(
-                data=data, sample_size=3)
+                profiler, data=data, sample_size=3)
 
         # note: bc the sample size is 3, only a subset of the data was sampled
         self.assertTrue(np.issubdtype(np.object_, df_series.dtype))
@@ -1551,7 +2041,7 @@ class TestUnstructuredProfiler(unittest.TestCase):
         # case when min_true_samples set and subset of data
         df_series, base_stats = \
             UnstructuredProfiler._clean_data_and_get_base_stats(
-                data=data, sample_size=3, min_true_samples=2)
+                profiler, data=data, sample_size=3, min_true_samples=2)
 
         # note: bc the sample size is 3, only a subset of the data was sampled
         self.assertTrue(np.issubdtype(np.object_, df_series.dtype))
@@ -1570,20 +2060,43 @@ class TestUnstructuredProfiler(unittest.TestCase):
         data2 = pd.Series(['here\n', '\t    ', ' ', ' is', '\n\r', 'more data'])
 
         # profiler with first dataset
-        profiler = UnstructuredProfiler(data1)
+        with test_utils.mock_timeit():
+            profiler = UnstructuredProfiler(data1)
         self.assertEqual(4, profiler.total_samples)
         self.assertEqual(1, profiler._empty_line_count)
         self.assertEqual(15 / 1024 ** 2, profiler.memory_size)
         # note how sample doesn't include whitespace lines
         self.assertCountEqual(['this', 'is my', 'test'], profiler.sample)
+        self.assertDictEqual({'clean_and_base_stats': 1}, profiler.times)
 
         # update with second dataset
-        profiler.update_profile(data2)
+        with test_utils.mock_timeit():
+            profiler.update_profile(data2)
         self.assertEqual(10, profiler.total_samples)
         self.assertEqual(4, profiler._empty_line_count)
         self.assertEqual(40 / 1024 ** 2, profiler.memory_size)
         # note how sample doesn't include whitespace lines
         self.assertCountEqual(['here\n', ' is', 'more data'], profiler.sample)
+        self.assertDictEqual({'clean_and_base_stats': 2}, profiler.times)
+
+    @mock.patch('dataprofiler.profilers.profile_builder.UnstructuredProfiler.'
+                'update_profile')
+    def test_min_true_samples(self, *mocks):
+        empty_df = pd.DataFrame([])
+
+        # Test invalid input
+        msg = "`min_true_samples` must be an integer or `None`."
+        with self.assertRaisesRegex(ValueError, msg):
+            profile = dp.UnstructuredProfiler(empty_df, 
+                                              min_true_samples="Bloop")
+
+        # Test None input (equivalent to zero)
+        profile = dp.UnstructuredProfiler(empty_df, min_true_samples=None)
+        self.assertEqual(None, profile._min_true_samples)
+
+        # Test valid input
+        profile = dp.UnstructuredProfiler(empty_df, min_true_samples=10)
+        self.assertEqual(10, profile._min_true_samples)
 
 
 class TestUnstructuredProfilerWData(unittest.TestCase):
@@ -1622,12 +2135,14 @@ class TestUnstructuredProfilerWData(unittest.TestCase):
         profiler_options = ProfilerOptions()
         profiler_options.set({'data_labeler.is_enabled': False})
 
-        cls.profiler = UnstructuredProfiler(
-            cls.dataset, len(cls.dataset), options=profiler_options)
-        cls.profiler2 = UnstructuredProfiler(
-            pd.DataFrame(['extra', '\n', 'test\n', 'data .', 'For merging.']),
-            options=profiler_options
-        )
+        with test_utils.mock_timeit():
+            cls.profiler = UnstructuredProfiler(
+                cls.dataset, len(cls.dataset), options=profiler_options)
+            cls.profiler2 = UnstructuredProfiler(
+                pd.DataFrame(['extra', '\n', 'test\n', 'data .',
+                              'For merging.']),
+                options=profiler_options
+            )
         cls.report = cls.profiler.report()
 
     def test_sample(self):
@@ -1652,10 +2167,6 @@ class TestUnstructuredProfilerWData(unittest.TestCase):
         self.assertEqual(393 / 1024 ** 2, self.profiler.memory_size)
 
     def test_text_profiler_results(self):
-        # pop out times
-        self.assertIsNotNone(
-            self.report['data_stats']['statistics'].pop('times'))
-
         # vocab order doesn't matter
         expected_vocab = ['x', 'i', 'y', 's', '9', ',', 'u', 'b', 'f', 'Y', 'J',
                           'v', 'r', 'o', 'a', '6', 'n', 'h', ' ', 'g', 'R', 't',
@@ -1708,12 +2219,15 @@ class TestUnstructuredProfilerWData(unittest.TestCase):
                 'empty_line_count': 7,
                 'memory_size': 393 / 1024 ** 2,
                 'file_type': "<class 'pandas.core.frame.DataFrame'>",
-                'encoding': None},
+                'encoding': None,
+                'times': {'clean_and_base_stats': 1}
+            },
             'data_stats': {
                 'data_label': {},
                 'statistics': {
                     'word_count': expected_word_count,
-                    'vocab_count': expected_vocab_count
+                    'vocab_count': expected_vocab_count,
+                    'times': {'words': 1, 'vocab': 1},
                 }
             }
         }
@@ -2085,8 +2599,8 @@ class TestStructuredProfilerNullValues(unittest.TestCase):
         opts.structured_options.multiprocess.is_enabled = False
 
         # When setting min true samples/samples per update
-        profile = dp.StructuredProfiler(data1, min_true_samples=2, samples_per_update=2,
-                                        options=opts)
+        profile = dp.StructuredProfiler(data1, min_true_samples=2,
+                                        samples_per_update=2, options=opts)
         self.assertEqual(3, profile.row_has_null_count)
         self.assertEqual(1, profile.row_is_null_count)
         self.assertEqual(0.75, profile._get_row_has_null_ratio())
@@ -2302,6 +2816,24 @@ class TestProfilerFactoryClass(unittest.TestCase):
             save_profile.update_profile(pd.DataFrame(['test', 'test2']))
             load_profile.update_profile(pd.DataFrame(['test', 'test2']))
 
+    @mock.patch('dataprofiler.profilers.profile_builder.StructuredProfiler.'
+                'update_profile')
+    @mock.patch('dataprofiler.profilers.profile_builder.DataLabeler')
+    def test_min_true_samples(self, *mocks):
+        empty_df = pd.DataFrame([])
+
+        # Test invalid input
+        msg = "`min_true_samples` must be an integer or `None`."
+        with self.assertRaisesRegex(ValueError, msg):
+            profile = dp.Profiler(empty_df, min_true_samples="Bloop")
+
+        # Test None input (equivalent to zero)
+        profile = dp.Profiler(empty_df, min_true_samples=None)
+        self.assertEqual(None, profile._min_true_samples)
+
+        # Test valid input
+        profile = dp.Profiler(empty_df, min_true_samples=10)
+        self.assertEqual(10, profile._min_true_samples)
 
 if __name__ == '__main__':
     unittest.main()
